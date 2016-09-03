@@ -29,7 +29,7 @@ class Colors:
 
 
 def display_message(message):
-    print "[%s] %s" % (time.strftime("%Y-%m-%d.%H:%M:%S", time.gmtime()), message)
+    print("[%s] %s" % (time.strftime("%Y-%m-%d.%H:%M:%S", time.gmtime()), message))
 
 
 def warning(message):
@@ -93,146 +93,103 @@ function_mapping = {
     'display_message': display_message,
     'warning': warning,
     'ok': ok,
-    'info': info,
-    # 'aes_encrypt': aes_encrypt,
-    # 'aes_decrypt': aes_decrypt
+    'info': info
 }
 
 
 class Exfiltration(object):
     def __init__(self, results, key):
         self.KEY = key
-        self.plugin_manager = None
-        self.plugins = {}
+        self.protocol_manager = None
+        self.protocol = {}
         self.results = results
         self.target = "127.0.0.1"
 
         path = "protocols/"
-        plugins = {}
+        protocol = {}
 
-        # Load plugins
         sys.path.insert(0, path)
         for f in os.listdir(path):
             fname, ext = os.path.splitext(f)
-            if ext == '.py' and self.should_use_plugin(fname):
+            if ext == '.py' and self.should_use_protocol(fname):
                 mod = __import__(fname)
-                plugins[fname] = mod.Plugin(self, config["protocols"][fname])
+                protocol[fname] = mod.Protocol(self, config["protocols"][fname])
 
-    def should_use_plugin(self, plugin_name):
-        # if the plugin has been specified specifically (-p twitter)
-        if self.results.plugin and plugin_name not in self.results.plugin.split(','):
+    def should_use_protocol(self, protocol_name):
+        if self.results.protocol and protocol_name not in self.results.protocol.split(','):
             return False
         else:
             return True
 
-    def register_plugin(self, transport_method, functions):
-        self.plugins[transport_method] = functions
+    def register_protocol(self, transport_method, functions):
+        self.protocol[transport_method] = functions
+        self.protocol['config'] = config
 
-    def get_plugins(self):
-        return self.plugins
+    def get_protocol_function(self):
+        protocol_name = random.sample(self.protocol, 1)[0]
+        return self.protocol[protocol_name]['listen']
 
-    @staticmethod
-    def log_message(mode, message):
+    def log_message(self, mode, message):
         if mode in function_mapping:
             function_mapping[mode](message)
 
-    def get_random_plugin(self):
-        plugin_name = random.sample(self.plugins, 1)[0]
-        return plugin_name, self.plugins[plugin_name]['send']
-
-    def use_plugin(self, plugins):
-        tmp = {}
-        for plugin_name in plugins.split(','):
-            if plugin_name in self.plugins:
-                tmp[plugin_name] = self.plugins[plugin_name]
-        self.plugins.clear()
-        self.plugins = tmp
-
-    def remove_plugins(self, plugins):
-        for plugin_name in plugins:
-            if plugin_name in self.plugins:
-                del self.plugins[plugin_name]
-        display_message("{0} plugins will be used".format(
-            len(self.get_plugins())))
-
-    @staticmethod
-    def register_file(message):
+    def register_file(self, jobid, file_name):
         global files
-        jobid = message[0]
         if jobid not in files:
             files[jobid] = {}
-            files[jobid]['checksum'] = message[3].lower()
-            files[jobid]['filename'] = message[1].lower()
+            files[jobid]['filename'] = file_name.lower()
             files[jobid]['data'] = []
             files[jobid]['packets_number'] = []
-            warning("Register packet for file %s with checksum %s" %
-                    (files[jobid]['filename'], files[jobid]['checksum']))
+            warning("Register packet for file %s" % files[jobid]['filename'])
 
-    @staticmethod
-    def retrieve_file(jobid):
+    def retrieve_file(self, jobid, checksum):
         global files
         fname = files[jobid]['filename']
-        filename = "%s.%s" % (fname.replace(
-            os.path.pathsep, ''), time.strftime("%Y-%m-%d.%H:%M:%S", time.gmtime()))
+        filename = "%s.%s" % (fname.replace(os.path.pathsep, ''), time.strftime("%Y-%m-%d.%H:%M:%S", time.gmtime()))
         content = ''.join(str(v) for v in files[jobid]['data']).decode('hex')
-        # content = aes_decrypt(content, self.KEY)
+
         if COMPRESSION:
             content = decompress(content)
         f = open(filename, 'w')
         f.write(content)
         f.close()
-        if files[jobid]['checksum'] == md5(filename):
+        if checksum == md5(filename):
             ok("File %s recovered" % fname)
         else:
             warning("File %s corrupt!" % fname)
         del files[jobid]
 
-    def retrieve_data(self, data):
+    def retrieve_data(self, jobid, packet_index, data):
         global files
         try:
-            message = data
-            if message.count("|!|") >= 2:
-                info("Received {0} bytes".format(len(message)))
-                message = message.split("|!|")
-                jobid = message[0]
+            info("Received {0} bytes".format(len(data)))
 
-                # register packet
-                if message[2] == "REGISTER":
-                    self.register_file(message)
-                # done packet
-                elif message[2] == "DONE":
-                    self.retrieve_file(jobid)
-                # data packet
-                else:
-                    # making sure there's a jobid for this file
-                    if jobid in files and message[1] not in files[jobid]['packets_number']:
-                        files[jobid]['data'].append(''.join(message[2:]))
-                        files[jobid]['packets_number'].append(message[1])
+            if jobid in files and packet_index not in files[jobid]['packets_number']:
+                files[jobid]['data'].append(''.join(data))
+                files[jobid]['packets_number'].append(packet_index)
         except:
-            raise
             pass
 
 
-def signal_handler(bla, frame):
+def signal_handler():
     global threads
     warning('Killing DET and its subprocesses')
     os.kill(os.getpid(), signal.SIGKILL)
 
 
 def main():
-    global MAX_TIME_SLEEP, MIN_TIME_SLEEP, KEY, MAX_BYTES_READ, MIN_BYTES_READ, COMPRESSION
-    global threads, config
+    global COMPRESSION, threads, config
 
     parser = argparse.ArgumentParser(
         description='Data Exfiltration Toolkit (SensePost)')
     parser.add_argument('-c', action="store", dest="config", default=None,
                         help="Configuration file (eg. '-c ./config-sample.json')")
-    parser.add_argument('-p', action="store", dest="plugin",
+    parser.add_argument('-p', action="store", dest="protocol",
                         default=None, help="Plugins to use (eg. '-p dns,twitter')")
     results = parser.parse_args()
 
     if results.config is None:
-        print "Specify a configuration file!"
+        print("Specify a configuration file!")
         parser.print_help()
         sys.exit(-1)
 
@@ -247,12 +204,11 @@ def main():
     app = Exfiltration(results, KEY)
 
     threads = []
-    plugins = app.get_plugins()
-    for plugin in plugins:
-        thread = threading.Thread(target=plugins[plugin]['listen'])
-        thread.daemon = True
-        thread.start()
-        threads.append(thread)
+    function = app.get_protocol_function()
+    thread = threading.Thread(target=function)
+    thread.daemon = True
+    thread.start()
+    threads.append(thread)
 
     # Join for the threads
     for thread in threads:

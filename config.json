@@ -2,7 +2,7 @@
   "protocols": {
     "tcp": {
       "target": "127.0.0.1",
-      "port": 12389,
+      "port": 19283,
       "num_bytes": 20
     },
     "arp": {
@@ -10,11 +10,13 @@
       "port": "127.0.0.1"
     },
     "icmp": {
-      "target": "127.0.0.1"
+      "target": "127.0.0.1",
+      "num_bytes": 60
     },
     "udp": {
       "target": "127.0.0.1",
-      "port": "127.0.0.1"
+      "port": 19283,
+      "num_bytes": 60
     }
   },
   "compression": 1,

